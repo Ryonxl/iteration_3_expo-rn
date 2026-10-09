@@ -13,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
@@ -57,6 +57,37 @@ function formatDateTime(value: string | null): string {
   } catch {
     return 'No due date';
   }
+}
+
+function formatDateTimeInput(value: string | null): string {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function confirmAction(title: string, message: string): Promise<boolean> {
+  if (Platform.OS === 'web') {
+    if (typeof window === 'undefined') {
+      throw new Error('Browser confirmation is unavailable.');
+    }
+
+    return Promise.resolve(window.confirm(`${title}\n\n${message}`));
+  }
+
+  return new Promise((resolve) => {
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+      { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
+    ], { cancelable: true, onDismiss: () => resolve(false) });
+  });
 }
 
 function App() {
@@ -120,7 +151,10 @@ function App() {
       }
 
       const storedTask = tasks.find((item) => item.id === normalizedTask.id);
-      const nextWithNotification = await applyTaskNotificationLogic(normalizedTask);
+      const nextWithNotification =
+        Platform.OS === 'web'
+          ? { ...normalizedTask, notificationId: null }
+          : await applyTaskNotificationLogic(normalizedTask);
       const finalTask = { ...nextWithNotification };
 
       if (storedTask) {
@@ -211,17 +245,18 @@ function App() {
 
   const handleDeleteCategory = useCallback(
     async (categoryId: string): Promise<void> => {
-      Alert.alert('Delete category', 'Tasks from this category will become uncategorized.', [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            deleteCategory(categoryId);
-            await refreshData();
-          },
-        },
-      ]);
+      const confirmed = await confirmAction(
+        'Delete category',
+        'Tasks from this category will become uncategorized.',
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      deleteCategory(categoryId);
+      setCategoryFilter((currentFilter) => (currentFilter === categoryId ? null : currentFilter));
+      await refreshData();
     },
     [refreshData],
   );
@@ -412,17 +447,33 @@ function TaskEditorScreen({
 
   const selectedCategory = categories.find((category) => category.id === categoryId) ?? null;
 
-  const handleDatePicked = (_event: any, selectedDate?: Date) => {
-    setShowDatePicker(false);
+  const openDateTimePicker = () => {
+    const storedDate = dueDateTime ? new Date(dueDateTime) : new Date();
+    const initialDate = Number.isNaN(storedDate.getTime()) ? new Date() : storedDate;
 
-    if (!selectedDate) {
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: initialDate,
+        mode: 'date',
+        onValueChange: (_event, selectedDate) => {
+          const selectedDay = new Date(initialDate);
+          selectedDay.setFullYear(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate());
+
+          DateTimePickerAndroid.open({
+            value: selectedDay,
+            mode: 'time',
+            is24Hour: true,
+            onValueChange: (_timeEvent, selectedTime) => {
+              selectedDay.setHours(selectedTime.getHours(), selectedTime.getMinutes(), 0, 0);
+              setDueDateTime(selectedDay.toISOString());
+            },
+          });
+        },
+      });
       return;
     }
 
-    const current = dueDateTime ? new Date(dueDateTime) : new Date();
-    current.setFullYear(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate());
-    current.setHours(selectedDate.getHours(), selectedDate.getMinutes(), 0, 0);
-    setDueDateTime(current.toISOString());
+    setShowDatePicker(true);
   };
 
   const onSave = async () => {
@@ -452,17 +503,14 @@ function TaskEditorScreen({
       return;
     }
 
-    Alert.alert('Delete task', 'This task will be removed from SQLite.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await onDeleteTask(existingTask.id);
-          navigation.goBack();
-        },
-      },
-    ]);
+    const confirmed = await confirmAction('Delete task', 'This task will be permanently removed.');
+
+    if (!confirmed) {
+      return;
+    }
+
+    await onDeleteTask(existingTask.id);
+    navigation.goBack();
   };
 
   return (
@@ -480,16 +528,50 @@ function TaskEditorScreen({
       />
 
       <Text style={styles.sectionTitle}>Due date and time</Text>
-      <TouchableOpacity style={styles.selectionBox} onPress={() => setShowDatePicker(true)}>
-        <Text>{dueDateTime ? formatDateTime(dueDateTime) : 'Select due date and time'}</Text>
-      </TouchableOpacity>
+      {Platform.OS === 'web' ? (
+        <View style={styles.selectionBox}>
+          {React.createElement('input', {
+            type: 'datetime-local',
+            value: formatDateTimeInput(dueDateTime),
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+              if (!event.currentTarget.value) {
+                setDueDateTime(null);
+                return;
+              }
 
-      {showDatePicker && (
+              const selectedDate = new Date(event.currentTarget.value);
+              if (!Number.isNaN(selectedDate.getTime())) {
+                setDueDateTime(selectedDate.toISOString());
+              }
+            },
+            'aria-label': 'Due date and time',
+            style: {
+              width: '100%',
+              height: 44,
+              boxSizing: 'border-box',
+              border: 'none',
+              backgroundColor: 'transparent',
+              color: '#111827',
+              fontSize: 16,
+            },
+          })}
+        </View>
+      ) : (
+        <TouchableOpacity style={styles.selectionBox} onPress={openDateTimePicker}>
+          <Text>{dueDateTime ? formatDateTime(dueDateTime) : 'Select due date and time'}</Text>
+        </TouchableOpacity>
+      )}
+
+      {showDatePicker && Platform.OS === 'ios' && (
         <DateTimePicker
           value={dueDateTime ? new Date(dueDateTime) : new Date()}
           mode="datetime"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={handleDatePicked}
+          display="spinner"
+          onValueChange={(_event, selectedDate) => {
+            setDueDateTime(selectedDate.toISOString());
+            setShowDatePicker(false);
+          }}
+          onDismiss={() => setShowDatePicker(false)}
         />
       )}
 

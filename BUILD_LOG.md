@@ -176,3 +176,48 @@ Completed (with validation checks passing).
 ## Current Status
 
 Completed.
+
+---
+
+## Prompt / Request
+
+"Analise o projeto atual do aplicativo To-Do desenvolvido com Expo, React Native e TypeScript e corrija as funcionalidades que não estão funcionando corretamente."
+
+## Decision Summary
+
+- Manter a arquitetura atual: SQLite nativo e `localStorage` na web, sem adicionar dependências.
+- Preservar os filtros por status e a lógica de notificações nativa.
+- Usar confirmações compatíveis com navegador e nativo para que a exclusão possa realmente prosseguir nas plataformas suportadas.
+- Implementar seleção de data e horário específica para Android, iOS e web, mantendo o valor no campo existente `dueDateTime`.
+
+## Actions Performed
+
+- Em `App.tsx`, as exclusões confirmadas de tarefas e categorias agora executam após diálogo web ou alerta nativo e recarregam os dados. A exclusão de categoria também remove o filtro ativo que apontava para ela.
+- Em `App.tsx`, o Android agora abre os seletores nativos de data e horário em sequência; o iOS conserva o seletor nativo combinado; a web usa um campo `datetime-local`.
+- O salvamento web deixa de chamar o agendador nativo indisponível nessa plataforma; `src/notifications.ts` e o fluxo nativo de notificações não foram alterados.
+- Em `src/db.ts`, a leitura de tarefas na web resolve o nome da categoria a partir do armazenamento, refletindo o `LEFT JOIN` já usado no caminho SQLite. Ao excluir categoria, a tarefa associada continua existindo sem `categoryId`/`categoryName`.
+
+## Result
+
+- Os testes manuais no navegador confirmaram criação de tarefa com data/hora, persistência após recarregar a página, edição da data/hora, exclusão de categoria sem apagar tarefa associada e exclusão de tarefa persistente após novo carregamento.
+- `npx.cmd tsc --noEmit` concluiu sem erros; os diagnósticos de `App.tsx` e `src/db.ts` também não apontaram problemas.
+- O servidor Expo Web iniciou e a aplicação renderizou no navegador.
+- Não foram executados testes em Android ou iOS nem há testes automatizados específicos para esses fluxos.
+
+## Problems / Errors
+
+- O diálogo `Alert.alert` usado anteriormente não permitia completar os fluxos de confirmação na web.
+- O picker era configurado com `mode="datetime"` no Android, que oferece apenas seleção de data ou de hora nesse componente.
+- A integração nativa de notificações não está disponível na web: durante a validação, salvar tarefa com data futura falhou ao tentar agendar notificação antes de persistir a tarefa.
+- A leitura web não derivava `categoryName` pelo id da categoria, diferentemente da consulta SQLite.
+
+## Fixes Attempted
+
+- Substituída a confirmação para web por `window.confirm`, mantendo `Alert.alert` nas plataformas nativas.
+- Separados os seletores Android de data e horário; adicionada entrada web `datetime-local`; mantido o seletor combinado iOS.
+- O fluxo de salvamento web ignora agendamento de notificações, sem mudar o módulo nem o comportamento nativo. Lembretes web continuam sem suporte comprovado.
+- A leitura web agora deriva o nome da categoria e a exclusão limpa os dados de associação em tarefas relacionadas.
+
+## Current Status
+
+Completed para os fluxos verificados no web e para checagem estática. A validação em dispositivos Android/iOS continua pendente.

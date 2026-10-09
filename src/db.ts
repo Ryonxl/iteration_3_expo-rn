@@ -88,7 +88,11 @@ export function getCategories(): Category[] {
 
 export function getTasks(): Task[] {
   if (isWebRuntime) {
-    return readWebStorage<Task>(STORAGE_KEYS.tasks, []);
+    const categories = getCategories();
+    return readWebStorage<Task>(STORAGE_KEYS.tasks, []).map((task) => ({
+      ...task,
+      categoryName: categories.find((category) => category.id === task.categoryId)?.name ?? null,
+    }));
   }
 
   const rows = db?.getAllSync(
@@ -145,7 +149,9 @@ export function renameCategory(id: string, newName: string): Category {
 
 export function deleteCategory(categoryId: string): void {
   if (isWebRuntime) {
-    const tasks = getTasks().map((task) => ({ ...task, categoryId: task.categoryId === categoryId ? null : task.categoryId }));
+    const tasks = getTasks().map((task) =>
+      task.categoryId === categoryId ? { ...task, categoryId: null, categoryName: null } : task,
+    );
     const categories = getCategories().filter((category) => category.id !== categoryId);
     writeWebStorage(STORAGE_KEYS.tasks, tasks);
     writeWebStorage(STORAGE_KEYS.categories, categories);
